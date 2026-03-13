@@ -122,47 +122,46 @@ export default function IndexViewer() {
 
         return (
             <div className="list-view fade-in">
-                {items.map((item, idx) => (
-                    <div key={idx} className="list-item">
-                        <div className="list-icon">📰</div>
-                        <div className="list-content">
-                            <h3>{item.title}</h3>
-                            <div className="list-meta">
-                                <span className="badge info">Press Release</span>
-                                <span className="meta-text">ID: {item.press_id}</span>
-                                {item.publication_date && (
-                                    <>
-                                        <span className="meta-text divider">•</span>
-                                        <span className="meta-text">{item.publication_date}</span>
-                                    </>
+                {items.map((item) => {
+                    const files = Array.isArray(item.files) ? item.files : [];
+                    return (
+                        <div key={item.press_id} className="list-item">
+                            <div className="list-icon">📰</div>
+                            <div className="list-content">
+                                <h3>{item.title}</h3>
+                                <div className="list-meta">
+                                    <span className="meta-text">No. {item.press_id}</span>
+                                    {item.publication_date && (
+                                        <>
+                                            <span className="meta-text divider">•</span>
+                                            <span className="meta-text">{item.publication_date}</span>
+                                        </>
+                                    )}
+                                </div>
+                                {files.length > 0 && (
+                                    <div className="pr-files">
+                                        {files.map((file, i) => {
+                                            const ext = file.file_name.split('.').pop()?.toUpperCase() || 'FILE';
+                                            const match = file.file_name.match(/ - (\d+)\.\w+$/);
+                                            const num = match ? match[1] : i + 1;
+                                            return (
+                                                <a 
+                                                    href={file.url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    key={`${item.press_id}-${file.file_name}-${i}`}
+                                                    className={`file-chip ${ext === 'PDF' ? 'pdf' : ext === 'DOC' || ext === 'DOCX' ? 'doc' : 'default'}`}
+                                                >
+                                                    {ext} · File {num}
+                                                </a>
+                                            );
+                                        })}
+                                    </div>
                                 )}
                             </div>
-                            {Array.isArray(item.files) && item.files.length > 0 && (
-                                <div className="file-links">
-                                    {item.files.map((file, fileIdx) => {
-                                        // Extract file extension
-                                        const ext = file.file_name.split('.').pop()?.toUpperCase() || 'FILE';
-                                        // Get file number from "- N.ext" pattern
-                                        const match = file.file_name.match(/ - (\d+)\.\w+$/);
-                                        const fileNum = match ? match[1] : fileIdx + 1;
-                                        
-                                        return (
-                                            <a 
-                                                href={file.url} 
-                                                target="_blank" 
-                                                rel="noopener noreferrer" 
-                                                key={`${item.press_id}-${file.file_name}-${fileIdx}`}
-                                                className="file-link"
-                                            >
-                                                📄 File {fileNum} ({ext})
-                                            </a>
-                                        );
-                                    })}
-                                </div>
-                            )}
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
         );
     };
