@@ -120,6 +120,18 @@ export default function IndexViewer() {
         const items = data?.ciaa_press_releases || [];
         if (items.length === 0) return <p className="empty-state">No records found for CIAA Press Releases.</p>;
 
+        const getFileChipClass = (ext: string): string => {
+            if (ext === 'PDF') return 'pdf';
+            if (ext === 'DOC' || ext === 'DOCX') return 'doc';
+            return 'default';
+        };
+
+        const extractFileExtension = (fileName: string): string => {
+            const trimmed = fileName.trim();
+            const match = trimmed.match(/\.([A-Za-z0-9]+)$/);
+            return match ? match[1].toUpperCase() : 'FILE';
+        };
+
         return (
             <div className="list-view fade-in">
                 {items.map((item) => {
@@ -141,8 +153,8 @@ export default function IndexViewer() {
                                 {files.length > 0 && (
                                     <div className="pr-files">
                                         {files.map((file, i) => {
-                                            const ext = file.file_name.split('.').pop()?.toUpperCase() || 'FILE';
-                                            const match = file.file_name.match(/ - (\d+)\.\w+$/);
+                                            const ext = extractFileExtension(file.file_name);
+                                            const match = file.file_name.trim().match(/ - (\d+)\.\w+$/);
                                             const num = match ? match[1] : i + 1;
                                             return (
                                                 <a 
@@ -150,7 +162,7 @@ export default function IndexViewer() {
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                     key={`${item.press_id}-${file.file_name}-${i}`}
-                                                    className={`file-chip ${ext === 'PDF' ? 'pdf' : ext === 'DOC' || ext === 'DOCX' ? 'doc' : 'default'}`}
+                                                    className={`file-chip ${getFileChipClass(ext)}`}
                                                 >
                                                     {ext} · File {num}
                                                 </a>

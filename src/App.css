@@ -342,42 +342,6 @@
   background: var(--bg-main);
 }
 
-/* File Links for Press Releases */
-.file-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.file-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.75rem;
-  padding: 0.25rem 0.75rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--accent);
-  transition: all 0.2s;
-}
-
-.file-link:hover {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.file-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-}
-
 /* Press Release file chips */
 .pr-files {
   display: flex;
