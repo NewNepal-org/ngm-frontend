@@ -7,16 +7,31 @@ type IndexEntry = {
     metadata?: Record<string, string>;
 };
 
+type PressReleaseFile = {
+    url: string;
+    file_name: string;
+};
+
+type PressRelease = {
+    press_id: number;
+    title: string;
+    publication_date: string;
+    source_url: string;
+    full_text: string;
+    files: PressReleaseFile[];
+};
+
 type GlobalIndex = {
     ciaa_annual_reports?: IndexEntry[];
     kanun_patrika?: IndexEntry[];
+    ciaa_press_releases?: PressRelease[];
 };
 
 export default function IndexViewer() {
     const [data, setData] = useState<GlobalIndex | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<'ciaa' | 'kanun'>('kanun');
+    const [activeTab, setActiveTab] = useState<'ciaa' | 'kanun' | 'press'>('kanun');
 
     useEffect(() => {
         fetch('https://ngm-store.newnepal.org/index.json')
@@ -101,6 +116,55 @@ export default function IndexViewer() {
         );
     };
 
+    const renderPressReleases = () => {
+        const items = data?.ciaa_press_releases || [];
+        if (items.length === 0) return <p className="empty-state">No records found for CIAA Press Releases.</p>;
+
+        return (
+            <div className="list-view fade-in">
+                {items.map((item, idx) => (
+                    <div key={idx} className="list-item">
+                        <div className="list-icon">📰</div>
+                        <div className="list-content">
+                            <h3>{item.title}</h3>
+                            <div className="list-meta">
+                                <span className="badge info">Press Release</span>
+                                <span className="meta-text">ID: {item.press_id}</span>
+                                {item.publication_date && (
+                                    <>
+                                        <span className="meta-text divider">•</span>
+                                        <span className="meta-text">{item.publication_date}</span>
+                                    </>
+                                )}
+                            </div>
+                            <div className="file-links">
+                                {item.files.map((file, fileIdx) => {
+                                    // Extract file extension
+                                    const ext = file.file_name.split('.').pop()?.toUpperCase() || 'FILE';
+                                    // Get file number from "- N.ext" pattern
+                                    const match = file.file_name.match(/ - (\d+)\.\w+$/);
+                                    const fileNum = match ? match[1] : fileIdx + 1;
+                                    
+                                    return (
+                                        <a 
+                                            href={file.url} 
+                                            target="_blank" 
+                                            rel="noopener noreferrer" 
+                                            key={fileIdx}
+                                            className="file-link"
+                                        >
+                                            📄 File {fileNum} ({ext})
+                                        </a>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
     return (
         <div className="index-viewer">
             <div className="tabs slide-down">
@@ -116,10 +180,18 @@ export default function IndexViewer() {
                 >
                     CIAA Annual Reports
                 </button>
+                <button
+                    className={`tab-btn ${activeTab === 'press' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('press')}
+                >
+                    CIAA Press Releases
+                </button>
             </div>
 
             <div className="content-area">
-                {activeTab === 'kanun' ? renderKanunPatrika() : renderCiaaReports()}
+                {activeTab === 'kanun' && renderKanunPatrika()}
+                {activeTab === 'ciaa' && renderCiaaReports()}
+                {activeTab === 'press' && renderPressReleases()}
             </div>
         </div>
     );
