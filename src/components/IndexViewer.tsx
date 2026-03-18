@@ -77,6 +77,7 @@ export default function IndexViewer() {
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<TabKey>('kanun');
     const loadingRef = useRef<Set<TabKey>>(new Set());
+    const abortControllersRef = useRef<Map<TabKey, AbortController>>(new Map());
 
     // Load root index once
     useEffect(() => {
@@ -118,17 +119,29 @@ export default function IndexViewer() {
         const ref = stubs[tab];
         if (!ref || manuscripts[tab] !== null || loadingRef.current.has(tab)) return;
 
+        // Abort any existing request for this tab
+        const existingController = abortControllersRef.current.get(tab);
+        if (existingController) {
+            existingController.abort();
+        }
+
         loadingRef.current.add(tab);
         setTabLoading((prev) => ({ ...prev, [tab]: true }));
         
+        const controller = new AbortController();
+        abortControllersRef.current.set(tab, controller);
+        
         try {
-            const controller = new AbortController();
             const items = await fetchAllManuscripts(ref, controller.signal);
             setManuscripts((prev) => ({ ...prev, [tab]: items }));
         } catch (err: unknown) {
+            if (err instanceof Error && (err.message === 'Request was cancelled' || err.name === 'AbortError')) {
+                return; // Don't set error for cancelled requests
+            }
             const msg = err instanceof Error ? err.message : 'Failed to load data';
             setError(msg);
         } finally {
+            abortControllersRef.current.delete(tab);
             loadingRef.current.delete(tab);
             setTabLoading((prev) => ({ ...prev, [tab]: false }));
         }
@@ -137,6 +150,15 @@ export default function IndexViewer() {
     useEffect(() => {
         if (!rootLoading) loadTab(activeTab);
     }, [activeTab, rootLoading, loadTab]);
+
+    // Cleanup on unmount - abort all pending requests
+    useEffect(() => {
+        const controllers = abortControllersRef.current;
+        return () => {
+            controllers.forEach((controller) => controller.abort());
+            controllers.clear();
+        };
+    }, []);
 
     if (rootLoading) {
         return (
