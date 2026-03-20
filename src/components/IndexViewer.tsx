@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 
-// NGM Index v2.0 types - Tree-based hierarchical index
+// TODO: Refactor this 600+ line file into smaller components:
+    // Extract API logic → src/api/indexApi.ts (fetchPage, types)
+// Extract tab renderers → src/components/tabs/KanunTab.tsx, CiaaReportsTab.tsx, PressReleasesTab.tsx
+// Extract shared UI → src/components/ui/LoadingSpinner.tsx, ErrorMessage.tsx, EmptyState.tsx
+// Keep IndexViewer.tsx as orchestrator with state management only
+
+// NGM Index types - Tree-based hierarchical index
 type Manuscript = {
     url: string;
     file_name: string;
@@ -30,58 +37,9 @@ type RootIndex = {
 type TabKey = 'kanun' | 'ciaa' | 'press';
 
 /**
- * Custom hook for infinite scroll using IntersectionObserver.
- *
- * Uses a callback ref for the sentinel element so the observer is always
- * attached to the current DOM node, even after tab switches remount it.
- *
- * @param callback - Function to call when sentinel element intersects viewport
- * @param hasMore - Whether more content is available to load
- * @param isLoading - Whether content is currently being loaded
- * @returns Callback ref to attach to the sentinel element
- */
-function useInfiniteScroll(
-    callback: () => void,
-    hasMore: boolean,
-    isLoading: boolean,
-): (node: HTMLDivElement | null) => void {
-    const observerRef = useRef<IntersectionObserver | null>(null);
-    const callbackRef = useRef(callback);
-
-    // Keep callback ref up to date without triggering observer re-creation
-    useEffect(() => {
-        callbackRef.current = callback;
-    });
-
-    // Callback ref — fires whenever the sentinel DOM node mounts or unmounts.
-    // This guarantees the observer is always attached to the current element,
-    // even after tab switches remount the sentinel with a new DOM node.
-    const sentinelRef = useCallback(
-        (node: HTMLDivElement | null) => {
-            if (observerRef.current) {
-                observerRef.current.disconnect();
-                observerRef.current = null;
-            }
-            if (!node || !hasMore || isLoading) return;
-
-            observerRef.current = new IntersectionObserver(
-                (entries) => {
-                    if (entries[0].isIntersecting) {
-                        callbackRef.current();
-                    }
-                },
-                { threshold: 0.1, rootMargin: '100px' },
-            );
-            observerRef.current.observe(node);
-        },
-        [hasMore, isLoading],
-    );
-
-    return sentinelRef;
-}
-
-/**
  * Fetch a page of manuscripts from a URL.
+ * Logs the URL on failure for debugging but throws a generic user-safe message
+ * so internal pagination paths are never exposed in the UI.
  *
  * @param url - URL to fetch the page from
  * @param signal - Optional AbortSignal for request cancellation
@@ -92,8 +50,13 @@ async function fetchPage(
     signal?: AbortSignal,
 ): Promise<{ manuscripts: Manuscript[]; nextUrl?: string }> {
     const res = await fetch(url, { signal });
-    if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+    if (!res.ok) {
+        console.error('Failed to fetch index page', { url, status: res.status });
+        throw new Error('Failed to load index data');
+    }
     const node: IndexNodeFull = await res.json();
+    // Leaf nodes have manuscripts, non-leaf nodes don't — fallback to empty array
+    // prevents runtime errors if a non-leaf URL is accidentally passed here
     return {
         manuscripts: node.manuscripts || [],
         nextUrl: node.next,
@@ -128,22 +91,31 @@ export default function IndexViewer() {
     // IntersectionObserver fires twice before React commits a state update.
     const loadingMoreRef = useRef<Set<TabKey>>(new Set());
     const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+    // Track fetched page URLs per tab to prevent pagination loops
+    const seenPageUrlsRef = useRef<Record<TabKey, Set<string>>>({
+        kanun: new Set(),
+        ciaa: new Set(),
+        press: new Set(),
+    });
 
-    // Infinite scroll sentinels for each tab
+    // Infinite scroll sentinels for each tab.
+    // Passing `|| !!tabPaginationErrors.<tab>` as the isLoading argument disables
+    // the observer while a pagination error is displayed, preventing automatic
+    // retry loops where the same failing page is re-fetched continuously.
     const kanunSentinel = useInfiniteScroll(
         () => loadMore('kanun'),
         !!nextUrls.kanun,
-        loadingMore.kanun,
+        loadingMore.kanun || !!tabPaginationErrors.kanun,
     );
     const ciaaSentinel = useInfiniteScroll(
         () => loadMore('ciaa'),
         !!nextUrls.ciaa,
-        loadingMore.ciaa,
+        loadingMore.ciaa || !!tabPaginationErrors.ciaa,
     );
     const pressSentinel = useInfiniteScroll(
         () => loadMore('press'),
         !!nextUrls.press,
-        loadingMore.press,
+        loadingMore.press || !!tabPaginationErrors.press,
     );
 
     // Load root index once
@@ -158,11 +130,9 @@ export default function IndexViewer() {
         fetch(indexUrl, { signal: controller.signal })
             .then((res) => {
                 if (!res.ok) throw new Error('Failed to fetch the NGM Index v2');
-                return res.json() as Promise<RootIndex>;
+                return res.json();
             })
-            .then((root) => {
-                if (controller.signal.aborted) return;
-
+            .then((root: RootIndex) => {
                 const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null };
                 for (const child of root.children) {
                     const tab = NODE_NAMES[child.name as keyof typeof NODE_NAMES];
@@ -172,7 +142,7 @@ export default function IndexViewer() {
                 setRootLoading(false);
             })
             .catch((err) => {
-                if (controller.signal.aborted || err.name === 'AbortError') return;
+                if (err.name === 'AbortError') return;
 
                 setRootError(err.message || 'An unknown error occurred.');
                 setRootLoading(false);
@@ -193,6 +163,10 @@ export default function IndexViewer() {
                 existingController.abort();
             }
 
+            // Reset seen-URL tracking for this tab so retries start clean
+            seenPageUrlsRef.current[tab].clear();
+            seenPageUrlsRef.current[tab].add(ref);
+
             loadingRef.current.add(tab);
             setTabLoading((prev) => ({ ...prev, [tab]: true }));
 
@@ -205,7 +179,7 @@ export default function IndexViewer() {
                 setNextUrls((prev) => ({ ...prev, [tab]: nextUrl || null }));
                 setTabInitialized((prev) => ({ ...prev, [tab]: true }));
             } catch (err: unknown) {
-                if (err instanceof Error && (err.message === 'Request was cancelled' || err.name === 'AbortError')) {
+                if (err instanceof Error && err.name === 'AbortError') {
                     return; // Don't set error for cancelled requests
                 }
                 const msg = err instanceof Error ? err.message : 'Failed to load data';
@@ -226,6 +200,15 @@ export default function IndexViewer() {
             // Use synchronous ref lock — state check is not safe against concurrent
             // IntersectionObserver firings before React commits the update.
             if (!nextUrl || loadingMoreRef.current.has(tab)) return;
+
+            // Guard against cyclic next links — stop if we've already fetched this URL
+            if (seenPageUrlsRef.current[tab].has(nextUrl)) {
+                console.error('Pagination loop detected', { tab, nextUrl });
+                setTabPaginationErrors((prev) => ({ ...prev, [tab]: 'Pagination loop detected.' }));
+                setNextUrls((prev) => ({ ...prev, [tab]: null }));
+                return;
+            }
+
             loadingMoreRef.current.add(tab);
 
             const controller = new AbortController();
@@ -235,12 +218,14 @@ export default function IndexViewer() {
 
             try {
                 const { manuscripts: items, nextUrl: newNextUrl } = await fetchPage(nextUrl, controller.signal);
+                // Mark this page as seen before updating state
+                seenPageUrlsRef.current[tab].add(nextUrl);
                 setManuscripts((prev) => ({ ...prev, [tab]: [...prev[tab], ...items] }));
                 setNextUrls((prev) => ({ ...prev, [tab]: newNextUrl || null }));
                 // Clear any previous pagination error on success
                 setTabPaginationErrors((prev) => ({ ...prev, [tab]: null }));
             } catch (err: unknown) {
-                if (err instanceof Error && (err.message === 'Request was cancelled' || err.name === 'AbortError')) {
+                if (err instanceof Error && err.name === 'AbortError') {
                     return;
                 }
                 const msg = err instanceof Error ? err.message : 'Failed to load more';
@@ -344,7 +329,9 @@ export default function IndexViewer() {
             );
         }
         const items = manuscripts.kanun;
-        if (items.length === 0) return <p className="empty-state">No records found for Kanun Patrika.</p>;
+        if (tabInitialized.kanun && items.length === 0) {
+            return <p className="empty-state">No records found for Kanun Patrika.</p>;
+        }
 
         return (
             <div className="list-view fade-in">
@@ -358,7 +345,7 @@ export default function IndexViewer() {
                     >
                         <div className="list-icon">🏛️</div>
                         <div className="list-content">
-                            <h3>{item.file_name.replace('.pdf', '')}</h3>
+                            <h3>{item.file_name.replace(/\.pdf$/i, '')}</h3>
                             <div className="list-meta">
                                 <span className="badge">Supreme Court</span>
                             </div>
@@ -406,7 +393,9 @@ export default function IndexViewer() {
             );
         }
         const items = manuscripts.ciaa;
-        if (items.length === 0) return <p className="empty-state">No records found for CIAA Annual Reports.</p>;
+        if (tabInitialized.ciaa && items.length === 0) {
+            return <p className="empty-state">No records found for CIAA Annual Reports.</p>;
+        }
 
         // Sort by date (newest first) - try multiple date fields
         const sortedItems = [...items].sort((a, b) => {
@@ -433,7 +422,10 @@ export default function IndexViewer() {
         return (
             <div className="list-view fade-in">
                 {sortedItems.map((item) => {
-                    const meta = item.metadata as Record<string, string>;
+                    const meta = item.metadata;
+                    const title = typeof meta?.title === 'string' ? meta.title : item.file_name;
+                    const serialNumber = meta?.serial_number ? String(meta.serial_number) : 'N/A';
+                    const date = meta?.date ? String(meta.date) : 'Unknown Date';
                     return (
                         <a
                             href={item.url}
@@ -444,12 +436,12 @@ export default function IndexViewer() {
                         >
                             <div className="list-icon">⚖️</div>
                             <div className="list-content">
-                                <h3>{meta?.title || item.file_name}</h3>
+                                <h3>{title}</h3>
                                 <div className="list-meta">
                                     <span className="badge warning">CIAA</span>
-                                    <span className="meta-text">No. {meta?.serial_number || 'N/A'}</span>
+                                    <span className="meta-text">No. {serialNumber}</span>
                                     <span className="meta-text divider">•</span>
-                                    <span className="meta-text">{meta?.date || 'Unknown Date'}</span>
+                                    <span className="meta-text">{date}</span>
                                 </div>
                             </div>
                             <div className="list-action">→</div>
@@ -496,7 +488,9 @@ export default function IndexViewer() {
             );
         }
         const items = manuscripts.press;
-        if (items.length === 0) return <p className="empty-state">No records found for CIAA Press Releases.</p>;
+        if (tabInitialized.press && items.length === 0) {
+            return <p className="empty-state">No records found for CIAA Press Releases.</p>;
+        }
 
         const extractFileExtension = (fileName: string): string => {
             const match = fileName.trim().match(/\.([A-Za-z0-9]+)$/);
@@ -522,7 +516,8 @@ export default function IndexViewer() {
                     files: [],
                 });
             }
-            grouped.get(groupKey)!.files.push(item);
+            const group = grouped.get(groupKey)!;
+            group.files.push(item);
         }
 
         return (
@@ -530,46 +525,50 @@ export default function IndexViewer() {
                 {[...grouped.entries()]
                     .sort(([, a], [, b]) => (b.pressId ?? -Infinity) - (a.pressId ?? -Infinity))
                     // Use groupKey as the React key — it is unique by construction
-                    .map(([groupKey, { pressId, meta, files }]) => (
-                        <div key={groupKey} className="list-item">
-                            <div className="list-icon">📰</div>
-                            <div className="list-content">
-                                <h3>
-                                    {String(meta?.title || `Press Release ${pressId ? `#${pressId}` : '(Unknown)'}`)}
-                                </h3>
-                                <div className="list-meta">
-                                    <span className="meta-text">No. {pressId ?? 'N/A'}</span>
-                                    {meta?.publication_date ? (
-                                        <>
-                                            <span className="meta-text divider">•</span>
-                                            <span className="meta-text">{String(meta.publication_date)}</span>
-                                        </>
-                                    ) : null}
-                                </div>
-
-                                {files.length > 0 && (
-                                    <div className="pr-files">
-                                        {files.map((file, i) => {
-                                            const ext = extractFileExtension(file.file_name);
-                                            const match = file.file_name.trim().match(/ - (\d+)\.\w+$/);
-                                            const num = match ? match[1] : i + 1;
-                                            return (
-                                                <a
-                                                    href={file.url}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    key={file.url}
-                                                    className={`file-chip ${getFileChipClass(ext)}`}
-                                                >
-                                                    {ext} · File {num}
-                                                </a>
-                                            );
-                                        })}
+                    .map(([groupKey, { pressId, meta, files }]) => {
+                        const title = typeof meta?.title === 'string' 
+                            ? meta.title 
+                            : `Press Release ${pressId ? `#${pressId}` : '(Unknown)'}`;
+                        const publicationDate = meta?.publication_date ? String(meta.publication_date) : null;
+                        return (
+                            <div key={groupKey} className="list-item">
+                                <div className="list-icon">📰</div>
+                                <div className="list-content">
+                                    <h3>{title}</h3>
+                                    <div className="list-meta">
+                                        <span className="meta-text">No. {pressId ?? 'N/A'}</span>
+                                        {publicationDate ? (
+                                            <>
+                                                <span className="meta-text divider">•</span>
+                                                <span className="meta-text">{publicationDate}</span>
+                                            </>
+                                        ) : null}
                                     </div>
-                                )}
+
+                                    {files.length > 0 && (
+                                        <div className="pr-files">
+                                            {files.map((file, i) => {
+                                                const ext = extractFileExtension(file.file_name);
+                                                const match = file.file_name.trim().match(/ - (\d+)\.\w+$/);
+                                                const num = match ? match[1] : i + 1;
+                                                return (
+                                                    <a
+                                                        href={file.url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        key={file.url}
+                                                        className={`file-chip ${getFileChipClass(ext)}`}
+                                                    >
+                                                        {ext} · File {num}
+                                                    </a>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 {nextUrls.press && (
                     <div ref={pressSentinel} className="scroll-sentinel">
                         {loadingMore.press && (
