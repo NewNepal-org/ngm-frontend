@@ -1,5 +1,36 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
+/** Custom hook for infinite scroll */
+function useInfiniteScroll(callback: () => void, hasMore: boolean, isLoading: boolean) {
+    const observerRef = useRef<IntersectionObserver | null>(null);
+    const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (!hasMore || isLoading) return;
+
+        observerRef.current = new IntersectionObserver(
+            (entries) => {
+                if (entries[0].isIntersecting) {
+                    callback();
+                }
+            },
+            { threshold: 0.1, rootMargin: '100px' }
+        );
+
+        if (sentinelRef.current) {
+            observerRef.current.observe(sentinelRef.current);
+        }
+
+        return () => {
+            if (observerRef.current) {
+                observerRef.current.disconnect();
+            }
+        };
+    }, [callback, hasMore, isLoading]);
+
+    return sentinelRef;
+}
+
 // NGM Index v2.0 types - Tree-based hierarchical index
 type Manuscript = {
     url: string;
@@ -27,38 +58,15 @@ type RootIndex = {
     children: IndexNodeStub[];
 };
 
-/** Fetch all manuscripts for a node, following pagination via `next` links. */
-async function fetchAllManuscripts(ref: string, signal?: AbortSignal): Promise<Manuscript[]> {
-    const manuscripts: Manuscript[] = [];
-    let url: string | undefined = ref;
-    const visitedUrls = new Set<string>();
-    let pageCount = 0;
-    const maxPages = 100; // Safety limit
-
-    while (url) {
-        if (signal?.aborted) {
-            throw new Error('Request was cancelled');
-        }
-
-        if (visitedUrls.has(url)) {
-            throw new Error(`Circular reference detected: ${url}`);
-        }
-
-        if (pageCount >= maxPages) {
-            throw new Error(`Maximum page limit (${maxPages}) exceeded`);
-        }
-
-        visitedUrls.add(url);
-        pageCount++;
-
-        const res = await fetch(url, { signal });
-        if (!res.ok) throw new Error(`Failed to fetch ${url}`);
-        const node: IndexNodeFull = await res.json();
-        if (node.manuscripts) manuscripts.push(...node.manuscripts);
-        url = node.next;
-    }
-
-    return manuscripts;
+/** Fetch a page of manuscripts from a URL. */
+async function fetchPage(url: string, signal?: AbortSignal): Promise<{ manuscripts: Manuscript[]; nextUrl?: string }> {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+    const node: IndexNodeFull = await res.json();
+    return {
+        manuscripts: node.manuscripts || [],
+        nextUrl: node.next,
+    };
 }
 
 const NODE_NAMES = {
@@ -71,14 +79,34 @@ type TabKey = 'kanun' | 'ciaa' | 'press';
 
 export default function IndexViewer() {
     const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
-    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null });
+    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[]>>({ kanun: [], ciaa: [], press: [] });
+    const [nextUrls, setNextUrls] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
     const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
+    const [loadingMore, setLoadingMore] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
+    const [tabInitialized, setTabInitialized] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
     const [rootLoading, setRootLoading] = useState(true);
     const [rootError, setRootError] = useState<string | null>(null);
     const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
     const [activeTab, setActiveTab] = useState<TabKey>('kanun');
     const loadingRef = useRef<Set<TabKey>>(new Set());
-    const abortControllersRef = useRef<Map<TabKey, AbortController>>(new Map());
+    const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+
+    // Infinite scroll sentinels for each tab
+    const kanunSentinel = useInfiniteScroll(
+        () => loadMore('kanun'),
+        !!nextUrls.kanun,
+        loadingMore.kanun
+    );
+    const ciaaSentinel = useInfiniteScroll(
+        () => loadMore('ciaa'),
+        !!nextUrls.ciaa,
+        loadingMore.ciaa
+    );
+    const pressSentinel = useInfiniteScroll(
+        () => loadMore('press'),
+        !!nextUrls.press,
+        loadingMore.press
+    );
 
     // Load root index once
     useEffect(() => {
@@ -115,10 +143,10 @@ export default function IndexViewer() {
         return () => controller.abort();
     }, []);
 
-    // Lazy-load manuscripts when a tab is first activated
+    // Lazy-load first page when a tab is first activated
     const loadTab = useCallback(async (tab: TabKey) => {
         const ref = stubs[tab];
-        if (!ref || manuscripts[tab] !== null || loadingRef.current.has(tab)) return;
+        if (!ref || tabInitialized[tab] || loadingRef.current.has(tab)) return;
 
         // Abort any existing request for this tab
         const existingController = abortControllersRef.current.get(tab);
@@ -133,8 +161,10 @@ export default function IndexViewer() {
         abortControllersRef.current.set(tab, controller);
         
         try {
-            const items = await fetchAllManuscripts(ref, controller.signal);
+            const { manuscripts: items, nextUrl } = await fetchPage(ref, controller.signal);
             setManuscripts((prev) => ({ ...prev, [tab]: items }));
+            setNextUrls((prev) => ({ ...prev, [tab]: nextUrl || null }));
+            setTabInitialized((prev) => ({ ...prev, [tab]: true }));
         } catch (err: unknown) {
             if (err instanceof Error && (err.message === 'Request was cancelled' || err.name === 'AbortError')) {
                 return; // Don't set error for cancelled requests
@@ -146,7 +176,33 @@ export default function IndexViewer() {
             loadingRef.current.delete(tab);
             setTabLoading((prev) => ({ ...prev, [tab]: false }));
         }
-    }, [stubs, manuscripts]);
+    }, [stubs, tabInitialized]);
+
+    // Load more manuscripts (next page)
+    const loadMore = useCallback(async (tab: TabKey) => {
+        const nextUrl = nextUrls[tab];
+        if (!nextUrl || loadingMore[tab]) return;
+
+        const controller = new AbortController();
+        abortControllersRef.current.set(`${tab}-more`, controller);
+        
+        setLoadingMore((prev) => ({ ...prev, [tab]: true }));
+        
+        try {
+            const { manuscripts: items, nextUrl: newNextUrl } = await fetchPage(nextUrl, controller.signal);
+            setManuscripts((prev) => ({ ...prev, [tab]: [...prev[tab], ...items] }));
+            setNextUrls((prev) => ({ ...prev, [tab]: newNextUrl || null }));
+        } catch (err: unknown) {
+            if (err instanceof Error && (err.message === 'Request was cancelled' || err.name === 'AbortError')) {
+                return;
+            }
+            const msg = err instanceof Error ? err.message : 'Failed to load more';
+            setTabErrors((prev) => ({ ...prev, [tab]: msg }));
+        } finally {
+            abortControllersRef.current.delete(`${tab}-more`);
+            setLoadingMore((prev) => ({ ...prev, [tab]: false }));
+        }
+    }, [nextUrls, loadingMore]);
 
     useEffect(() => {
         if (!rootLoading) loadTab(activeTab);
@@ -197,6 +253,7 @@ export default function IndexViewer() {
                     <p>{tabErrors.kanun}</p>
                     <button className="btn-primary mt" onClick={() => {
                         setTabErrors(prev => ({ ...prev, kanun: null }));
+                        setTabInitialized(prev => ({ ...prev, kanun: false }));
                         loadTab('kanun');
                     }}>Retry</button>
                 </div>
@@ -219,6 +276,16 @@ export default function IndexViewer() {
                         <div className="list-action">→</div>
                     </a>
                 ))}
+                {nextUrls.kanun && (
+                    <div ref={kanunSentinel} className="scroll-sentinel">
+                        {loadingMore.kanun && (
+                            <div className="loading-more">
+                                <div className="spinner-small"></div>
+                                <span>Loading more...</span>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
         );
     };
@@ -232,6 +299,7 @@ export default function IndexViewer() {
                     <p>{tabErrors.ciaa}</p>
                     <button className="btn-primary mt" onClick={() => {
                         setTabErrors(prev => ({ ...prev, ciaa: null }));
+                        setTabInitialized(prev => ({ ...prev, ciaa: false }));
                         loadTab('ciaa');
                     }}>Retry</button>
                 </div>
@@ -287,6 +355,16 @@ export default function IndexViewer() {
                         </a>
                     );
                 })}
+                {nextUrls.ciaa && (
+                    <div ref={ciaaSentinel} className="scroll-sentinel">
+                        {loadingMore.ciaa && (
+                            <div className="loading-more">
+                                <div className="spinner-small"></div>
+                                <span>Loading more...</span>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
         );
     };
@@ -300,6 +378,7 @@ export default function IndexViewer() {
                     <p>{tabErrors.press}</p>
                     <button className="btn-primary mt" onClick={() => {
                         setTabErrors(prev => ({ ...prev, press: null }));
+                        setTabInitialized(prev => ({ ...prev, press: false }));
                         loadTab('press');
                     }}>Retry</button>
                 </div>
@@ -379,6 +458,16 @@ export default function IndexViewer() {
                         </div>
                     );
                 })}
+                {nextUrls.press && (
+                    <div ref={pressSentinel} className="scroll-sentinel">
+                        {loadingMore.press && (
+                            <div className="loading-more">
+                                <div className="spinner-small"></div>
+                                <span>Loading more...</span>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
         );
     };

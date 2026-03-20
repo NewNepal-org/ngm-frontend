@@ -332,6 +332,48 @@
   background: var(--accent-hover);
 }
 
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.load-more-container {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+}
+
+.load-more-container .btn-primary {
+  margin-top: 0;
+}
+
+/* Infinite scroll */
+.scroll-sentinel {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 0;
+  min-height: 80px;
+}
+
+.loading-more {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.spinner-small {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
 /* Footer */
 .app-footer {
   text-align: center;
