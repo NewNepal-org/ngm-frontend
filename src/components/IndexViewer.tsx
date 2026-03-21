@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 
-// TODO: Refactor this 600+ line file into smaller components:
-    // Extract API logic → src/api/indexApi.ts (fetchPage, types)
+// TODO: Refactor this file into smaller components:
+// Extract API logic → src/api/indexApi.ts (fetchPage, types)
 // Extract tab renderers → src/components/tabs/KanunTab.tsx, CiaaReportsTab.tsx, PressReleasesTab.tsx
 // Extract shared UI → src/components/ui/LoadingSpinner.tsx, ErrorMessage.tsx, EmptyState.tsx
 // Keep IndexViewer.tsx as orchestrator with state management only
@@ -91,31 +91,22 @@ export default function IndexViewer() {
     // IntersectionObserver fires twice before React commits a state update.
     const loadingMoreRef = useRef<Set<TabKey>>(new Set());
     const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
-    // Track fetched page URLs per tab to prevent pagination loops
-    const seenPageUrlsRef = useRef<Record<TabKey, Set<string>>>({
-        kanun: new Set(),
-        ciaa: new Set(),
-        press: new Set(),
-    });
 
-    // Infinite scroll sentinels for each tab.
-    // Passing `|| !!tabPaginationErrors.<tab>` as the isLoading argument disables
-    // the observer while a pagination error is displayed, preventing automatic
-    // retry loops where the same failing page is re-fetched continuously.
+    // Infinite scroll sentinels for each tab
     const kanunSentinel = useInfiniteScroll(
         () => loadMore('kanun'),
         !!nextUrls.kanun,
-        loadingMore.kanun || !!tabPaginationErrors.kanun,
+        loadingMore.kanun,
     );
     const ciaaSentinel = useInfiniteScroll(
         () => loadMore('ciaa'),
         !!nextUrls.ciaa,
-        loadingMore.ciaa || !!tabPaginationErrors.ciaa,
+        loadingMore.ciaa,
     );
     const pressSentinel = useInfiniteScroll(
         () => loadMore('press'),
         !!nextUrls.press,
-        loadingMore.press || !!tabPaginationErrors.press,
+        loadingMore.press,
     );
 
     // Load root index once
@@ -130,9 +121,9 @@ export default function IndexViewer() {
         fetch(indexUrl, { signal: controller.signal })
             .then((res) => {
                 if (!res.ok) throw new Error('Failed to fetch the NGM Index v2');
-                return res.json();
+                return res.json() as Promise<RootIndex>;
             })
-            .then((root: RootIndex) => {
+            .then((root) => {
                 const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null };
                 for (const child of root.children) {
                     const tab = NODE_NAMES[child.name as keyof typeof NODE_NAMES];
@@ -162,10 +153,6 @@ export default function IndexViewer() {
             if (existingController) {
                 existingController.abort();
             }
-
-            // Reset seen-URL tracking for this tab so retries start clean
-            seenPageUrlsRef.current[tab].clear();
-            seenPageUrlsRef.current[tab].add(ref);
 
             loadingRef.current.add(tab);
             setTabLoading((prev) => ({ ...prev, [tab]: true }));
@@ -201,14 +188,6 @@ export default function IndexViewer() {
             // IntersectionObserver firings before React commits the update.
             if (!nextUrl || loadingMoreRef.current.has(tab)) return;
 
-            // Guard against cyclic next links — stop if we've already fetched this URL
-            if (seenPageUrlsRef.current[tab].has(nextUrl)) {
-                console.error('Pagination loop detected', { tab, nextUrl });
-                setTabPaginationErrors((prev) => ({ ...prev, [tab]: 'Pagination loop detected.' }));
-                setNextUrls((prev) => ({ ...prev, [tab]: null }));
-                return;
-            }
-
             loadingMoreRef.current.add(tab);
 
             const controller = new AbortController();
@@ -218,8 +197,6 @@ export default function IndexViewer() {
 
             try {
                 const { manuscripts: items, nextUrl: newNextUrl } = await fetchPage(nextUrl, controller.signal);
-                // Mark this page as seen before updating state
-                seenPageUrlsRef.current[tab].add(nextUrl);
                 setManuscripts((prev) => ({ ...prev, [tab]: [...prev[tab], ...items] }));
                 setNextUrls((prev) => ({ ...prev, [tab]: newNextUrl || null }));
                 // Clear any previous pagination error on success
@@ -268,16 +245,13 @@ export default function IndexViewer() {
                 <p className="error-icon">⚠️</p>
                 <h2>Connection Error</h2>
                 <p>{rootError}</p>
-                <button className="btn-primary mt" onClick={() => window.location.reload()}>
+                <button className="btn-primary" onClick={() => window.location.reload()}>
                     Retry
                 </button>
             </div>
         );
     }
 
-    /**
-     * Renders a loading spinner with message.
-     */
     const renderLoading = () => (
         <div className="state-container bounce-in">
             <div className="spinner"></div>
@@ -285,10 +259,6 @@ export default function IndexViewer() {
         </div>
     );
 
-    /**
-     * Renders an inline pagination error with a retry button.
-     * Shown near the sentinel so already-loaded content stays visible.
-     */
     const renderPaginationError = (tab: TabKey) => (
         <div className="loading-more">
             <span>{tabPaginationErrors[tab]}</span>
@@ -304,10 +274,6 @@ export default function IndexViewer() {
         </div>
     );
 
-    /**
-     * Renders the Kanun Patrika tab content with manuscripts list.
-     * Handles loading, error, and empty states.
-     */
     const renderKanunPatrika = () => {
         if (tabLoading.kanun) return renderLoading();
         if (tabErrors.kanun) {
@@ -316,7 +282,7 @@ export default function IndexViewer() {
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.kanun}</p>
                     <button
-                        className="btn-primary mt"
+                        className="btn-primary"
                         onClick={() => {
                             setTabErrors((prev) => ({ ...prev, kanun: null }));
                             setTabInitialized((prev) => ({ ...prev, kanun: false }));
@@ -368,10 +334,6 @@ export default function IndexViewer() {
         );
     };
 
-    /**
-     * Renders the CIAA Annual Reports tab content with manuscripts list.
-     * Handles loading, error, and empty states. Sorts by date (newest first).
-     */
     const renderCiaaReports = () => {
         if (tabLoading.ciaa) return renderLoading();
         if (tabErrors.ciaa) {
@@ -380,7 +342,7 @@ export default function IndexViewer() {
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.ciaa}</p>
                     <button
-                        className="btn-primary mt"
+                        className="btn-primary"
                         onClick={() => {
                             setTabErrors((prev) => ({ ...prev, ciaa: null }));
                             setTabInitialized((prev) => ({ ...prev, ciaa: false }));
@@ -402,20 +364,25 @@ export default function IndexViewer() {
             const rawDateA = a.metadata?.date ?? a.metadata?.year ?? null;
             const rawDateB = b.metadata?.date ?? b.metadata?.year ?? null;
 
+            // If both have dates, compare them
             if (rawDateA && rawDateB) {
                 const dateA = new Date(String(rawDateA));
                 const dateB = new Date(String(rawDateB));
 
+                // If both are valid dates, compare numerically
                 if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
                     return dateB.getTime() - dateA.getTime();
                 }
 
+                // Fallback to string comparison
                 return String(rawDateB).localeCompare(String(rawDateA));
             }
 
+            // If only one has a date, prioritize the dated item
             if (rawDateA && !rawDateB) return -1;
             if (!rawDateA && rawDateB) return 1;
 
+            // If neither has a date, fallback to filename comparison (reverse alphabetical)
             return b.file_name.localeCompare(a.file_name);
         });
 
@@ -463,10 +430,6 @@ export default function IndexViewer() {
         );
     };
 
-    /**
-     * Renders the CIAA Press Releases tab content with grouped manuscripts.
-     * Groups files by press_id and handles loading, error, and empty states.
-     */
     const renderPressReleases = () => {
         if (tabLoading.press) return renderLoading();
         if (tabErrors.press) {
@@ -475,7 +438,7 @@ export default function IndexViewer() {
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.press}</p>
                     <button
-                        className="btn-primary mt"
+                        className="btn-primary"
                         onClick={() => {
                             setTabErrors((prev) => ({ ...prev, press: null }));
                             setTabInitialized((prev) => ({ ...prev, press: false }));
@@ -516,8 +479,7 @@ export default function IndexViewer() {
                     files: [],
                 });
             }
-            const group = grouped.get(groupKey)!;
-            group.files.push(item);
+            grouped.get(groupKey)!.files.push(item);
         }
 
         return (

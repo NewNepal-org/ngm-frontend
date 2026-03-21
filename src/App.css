@@ -332,23 +332,6 @@
   background: var(--accent-hover);
 }
 
-.btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.load-more-container {
-  display: flex;
-  justify-content: center;
-  padding: 2rem 0;
-  border-top: 1px solid var(--border);
-  margin-top: 1rem;
-}
-
-.load-more-container .btn-primary {
-  margin-top: 0;
-}
-
 /* Infinite scroll */
 .scroll-sentinel {
   display: flex;
