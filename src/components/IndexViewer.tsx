@@ -36,27 +36,13 @@ type RootIndex = {
 
 type TabKey = 'kanun' | 'ciaa' | 'press';
 
-/**
- * Fetch a page of manuscripts from a URL.
- * Logs the URL on failure for debugging but throws a generic user-safe message
- * so internal pagination paths are never exposed in the UI.
- *
- * @param url - URL to fetch the page from
- * @param signal - Optional AbortSignal for request cancellation
- * @returns Promise resolving to manuscripts array and optional next page URL
- */
 async function fetchPage(
     url: string,
     signal?: AbortSignal,
 ): Promise<{ manuscripts: Manuscript[]; nextUrl?: string }> {
     const res = await fetch(url, { signal });
-    if (!res.ok) {
-        console.error('Failed to fetch index page', { url, status: res.status });
-        throw new Error('Failed to load index data');
-    }
+    if (!res.ok) throw new Error('Failed to load index data');
     const node: IndexNodeFull = await res.json();
-    // Leaf nodes have manuscripts, non-leaf nodes don't — fallback to empty array
-    // prevents runtime errors if a non-leaf URL is accidentally passed here
     return {
         manuscripts: node.manuscripts || [],
         nextUrl: node.next,
@@ -71,24 +57,15 @@ const NODE_NAMES = {
 
 export default function IndexViewer() {
     const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
-    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[]>>({ kanun: [], ciaa: [], press: [] });
+    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null });
     const [nextUrls, setNextUrls] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
     const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
     const [loadingMore, setLoadingMore] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
-    const [tabInitialized, setTabInitialized] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
     const [rootLoading, setRootLoading] = useState(true);
     const [rootError, setRootError] = useState<string | null>(null);
     const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
-    // Separate pagination errors so a failed "load more" doesn't hide already-loaded content
-    const [tabPaginationErrors, setTabPaginationErrors] = useState<Record<TabKey, string | null>>({
-        kanun: null,
-        ciaa: null,
-        press: null,
-    });
     const [activeTab, setActiveTab] = useState<TabKey>('kanun');
     const loadingRef = useRef<Set<TabKey>>(new Set());
-    // Synchronous lock for loadMore — prevents duplicate fetches when the
-    // IntersectionObserver fires twice before React commits a state update.
     const loadingMoreRef = useRef<Set<TabKey>>(new Set());
     const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
@@ -146,9 +123,8 @@ export default function IndexViewer() {
     const loadTab = useCallback(
         async (tab: TabKey) => {
             const ref = stubs[tab];
-            if (!ref || tabInitialized[tab] || loadingRef.current.has(tab)) return;
+            if (!ref || manuscripts[tab] !== null || loadingRef.current.has(tab)) return;
 
-            // Abort any existing request for this tab
             const existingController = abortControllersRef.current.get(tab);
             if (existingController) {
                 existingController.abort();
@@ -164,10 +140,9 @@ export default function IndexViewer() {
                 const { manuscripts: items, nextUrl } = await fetchPage(ref, controller.signal);
                 setManuscripts((prev) => ({ ...prev, [tab]: items }));
                 setNextUrls((prev) => ({ ...prev, [tab]: nextUrl || null }));
-                setTabInitialized((prev) => ({ ...prev, [tab]: true }));
             } catch (err: unknown) {
                 if (err instanceof Error && err.name === 'AbortError') {
-                    return; // Don't set error for cancelled requests
+                    return;
                 }
                 const msg = err instanceof Error ? err.message : 'Failed to load data';
                 setTabErrors((prev) => ({ ...prev, [tab]: msg }));
@@ -177,37 +152,31 @@ export default function IndexViewer() {
                 setTabLoading((prev) => ({ ...prev, [tab]: false }));
             }
         },
-        [stubs, tabInitialized],
+        [stubs, manuscripts],
     );
 
     // Load more manuscripts (next page)
     const loadMore = useCallback(
         async (tab: TabKey) => {
             const nextUrl = nextUrls[tab];
-            // Use synchronous ref lock — state check is not safe against concurrent
-            // IntersectionObserver firings before React commits the update.
             if (!nextUrl || loadingMoreRef.current.has(tab)) return;
 
             loadingMoreRef.current.add(tab);
+            setLoadingMore((prev) => ({ ...prev, [tab]: true }));
 
             const controller = new AbortController();
             abortControllersRef.current.set(`${tab}-more`, controller);
 
-            setLoadingMore((prev) => ({ ...prev, [tab]: true }));
-
             try {
                 const { manuscripts: items, nextUrl: newNextUrl } = await fetchPage(nextUrl, controller.signal);
-                setManuscripts((prev) => ({ ...prev, [tab]: [...prev[tab], ...items] }));
+                setManuscripts((prev) => ({ ...prev, [tab]: [...(prev[tab] ?? []), ...items] }));
                 setNextUrls((prev) => ({ ...prev, [tab]: newNextUrl || null }));
-                // Clear any previous pagination error on success
-                setTabPaginationErrors((prev) => ({ ...prev, [tab]: null }));
             } catch (err: unknown) {
                 if (err instanceof Error && err.name === 'AbortError') {
                     return;
                 }
                 const msg = err instanceof Error ? err.message : 'Failed to load more';
-                // Write to pagination errors, not tabErrors — keeps already-loaded content visible
-                setTabPaginationErrors((prev) => ({ ...prev, [tab]: msg }));
+                setTabErrors((prev) => ({ ...prev, [tab]: msg }));
             } finally {
                 loadingMoreRef.current.delete(tab);
                 abortControllersRef.current.delete(`${tab}-more`);
@@ -221,7 +190,7 @@ export default function IndexViewer() {
         if (!rootLoading) loadTab(activeTab);
     }, [activeTab, rootLoading, loadTab]);
 
-    // Cleanup on unmount - abort all pending requests
+    // Cleanup on unmount
     useEffect(() => {
         const controllers = abortControllersRef.current;
         return () => {
@@ -259,21 +228,6 @@ export default function IndexViewer() {
         </div>
     );
 
-    const renderPaginationError = (tab: TabKey) => (
-        <div className="loading-more">
-            <span>{tabPaginationErrors[tab]}</span>
-            <button
-                className="btn-primary"
-                onClick={() => {
-                    setTabPaginationErrors((prev) => ({ ...prev, [tab]: null }));
-                    loadMore(tab);
-                }}
-            >
-                Retry
-            </button>
-        </div>
-    );
-
     const renderKanunPatrika = () => {
         if (tabLoading.kanun) return renderLoading();
         if (tabErrors.kanun) {
@@ -285,7 +239,7 @@ export default function IndexViewer() {
                         className="btn-primary"
                         onClick={() => {
                             setTabErrors((prev) => ({ ...prev, kanun: null }));
-                            setTabInitialized((prev) => ({ ...prev, kanun: false }));
+                            setManuscripts((prev) => ({ ...prev, kanun: null }));
                             loadTab('kanun');
                         }}
                     >
@@ -294,8 +248,8 @@ export default function IndexViewer() {
                 </div>
             );
         }
-        const items = manuscripts.kanun;
-        if (tabInitialized.kanun && items.length === 0) {
+        const items = manuscripts.kanun ?? [];
+        if (manuscripts.kanun !== null && items.length === 0) {
             return <p className="empty-state">No records found for Kanun Patrika.</p>;
         }
 
@@ -327,7 +281,6 @@ export default function IndexViewer() {
                                 <span>Loading more...</span>
                             </div>
                         )}
-                        {tabPaginationErrors.kanun && renderPaginationError('kanun')}
                     </div>
                 )}
             </div>
@@ -345,7 +298,7 @@ export default function IndexViewer() {
                         className="btn-primary"
                         onClick={() => {
                             setTabErrors((prev) => ({ ...prev, ciaa: null }));
-                            setTabInitialized((prev) => ({ ...prev, ciaa: false }));
+                            setManuscripts((prev) => ({ ...prev, ciaa: null }));
                             loadTab('ciaa');
                         }}
                     >
@@ -354,8 +307,8 @@ export default function IndexViewer() {
                 </div>
             );
         }
-        const items = manuscripts.ciaa;
-        if (tabInitialized.ciaa && items.length === 0) {
+        const items = manuscripts.ciaa ?? [];
+        if (manuscripts.ciaa !== null && items.length === 0) {
             return <p className="empty-state">No records found for CIAA Annual Reports.</p>;
         }
 
@@ -423,7 +376,6 @@ export default function IndexViewer() {
                                 <span>Loading more...</span>
                             </div>
                         )}
-                        {tabPaginationErrors.ciaa && renderPaginationError('ciaa')}
                     </div>
                 )}
             </div>
@@ -441,7 +393,7 @@ export default function IndexViewer() {
                         className="btn-primary"
                         onClick={() => {
                             setTabErrors((prev) => ({ ...prev, press: null }));
-                            setTabInitialized((prev) => ({ ...prev, press: false }));
+                            setManuscripts((prev) => ({ ...prev, press: null }));
                             loadTab('press');
                         }}
                     >
@@ -450,8 +402,8 @@ export default function IndexViewer() {
                 </div>
             );
         }
-        const items = manuscripts.press;
-        if (tabInitialized.press && items.length === 0) {
+        const items = manuscripts.press ?? [];
+        if (manuscripts.press !== null && items.length === 0) {
             return <p className="empty-state">No records found for CIAA Press Releases.</p>;
         }
 
@@ -539,7 +491,6 @@ export default function IndexViewer() {
                                 <span>Loading more...</span>
                             </div>
                         )}
-                        {tabPaginationErrors.press && renderPaginationError('press')}
                     </div>
                 )}
             </div>
