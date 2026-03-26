@@ -45,7 +45,7 @@ export function DataTable<TData>({
         getSortedRowModel: getSortedRowModel(),
         initialState: {
             pagination: {
-                pageSize: 10,
+                pageSize,
             },
         },
     });
@@ -150,8 +150,11 @@ export function DataTable<TData>({
                         ← Previous
                     </button>
                     <span className="pagination-info">
-                        Page {table.getState().pagination.pageIndex + 1} of{' '}
-                        {table.getPageCount()}
+                        {table.getPageCount() > 0 ? (
+                            <>Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}</>
+                        ) : (
+                            <>No pages</>
+                        )}
                     </span>
                     <button
                         onClick={() => table.nextPage()}
