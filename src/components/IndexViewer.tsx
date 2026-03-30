@@ -228,7 +228,7 @@ export default function IndexViewer() {
                 <p className="error-icon">⚠️</p>
                 <h2>Connection Error</h2>
                 <p>{rootError}</p>
-                <button className="btn-primary mt" onClick={() => window.location.reload()}>Retry</button>
+                <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
             </div>
         );
     }
@@ -254,7 +254,7 @@ export default function IndexViewer() {
                 <div className="state-container error fade-in">
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.kanun}</p>
-                    <button className="btn-primary mt" onClick={() => {
+                    <button className="btn-primary" onClick={() => {
                         setTabErrors(prev => ({ ...prev, kanun: null }));
                         loadTab('kanun');
                     }}>Retry</button>
@@ -336,7 +336,7 @@ export default function IndexViewer() {
                 <div className="state-container error fade-in">
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.ciaa}</p>
-                    <button className="btn-primary mt" onClick={() => {
+                    <button className="btn-primary" onClick={() => {
                         setTabErrors(prev => ({ ...prev, ciaa: null }));
                         loadTab('ciaa');
                     }}>Retry</button>
@@ -441,7 +441,7 @@ export default function IndexViewer() {
                 <div className="state-container error fade-in">
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.press}</p>
-                    <button className="btn-primary mt" onClick={() => {
+                    <button className="btn-primary" onClick={() => {
                         setTabErrors(prev => ({ ...prev, press: null }));
                         loadTab('press');
                     }}>Retry</button>
