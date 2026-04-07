@@ -12,7 +12,7 @@ function App() {
           </div>
           <nav>
             <a href="https://jawafdehi.org" target="_blank" rel="noopener noreferrer" className="nav-link">Jawafdehi</a>
-            <a href="https://newnepal.org" target="_blank" rel="noopener noreferrer" className="nav-link">NewNepal</a>
+            <a href="https://nes.jawafdehi.org" target="_blank" rel="noopener noreferrer" className="nav-link">Nepal Entity Service (NES)</a>
           </nav>
         </div>
       </header>
@@ -29,7 +29,7 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <p>&copy; {new Date().getFullYear()} NewNepal.org. Open Data. Open Governance.</p>
+        <p>&copy; {new Date().getFullYear()} Jawafdehi.org. Open Data. Open Governance.</p>
       </footer>
     </div>
   );
