@@ -110,22 +110,82 @@ async function fetchAllManuscripts(
     return manuscripts;
 }
 
+/** Fetch all manuscripts recursively, traversing children nodes and pagination. */
+async function fetchAllManuscriptsRecursive(
+    ref: string,
+    signal?: AbortSignal,
+    onProgress?: (current: number, total: number) => void
+): Promise<Manuscript[]> {
+    const manuscripts: Manuscript[] = [];
+    const visitedUrls = new Set<string>();
+    let pageCount = 0;
+    const maxPages = 1000; // Higher limit for recursive fetching
+
+    async function traverse(url: string): Promise<void> {
+        if (signal?.aborted) {
+            throw new Error('Request was cancelled');
+        }
+
+        if (visitedUrls.has(url)) {
+            return; // Skip already visited URLs
+        }
+
+        if (pageCount >= maxPages) {
+            throw new Error(`Maximum page limit (${maxPages}) exceeded`);
+        }
+
+        visitedUrls.add(url);
+        pageCount++;
+
+        // Report progress
+        if (onProgress) {
+            onProgress(pageCount, maxPages);
+        }
+
+        const proxiedUrl = getProxiedUrl(url);
+        const res = await fetch(proxiedUrl, { signal });
+        if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+        const node: IndexNodeFull = await res.json();
+
+        // Add manuscripts from this node
+        if (node.manuscripts) {
+            manuscripts.push(...node.manuscripts);
+        }
+
+        // Traverse children nodes
+        if (node.children) {
+            for (const child of node.children) {
+                await traverse(child.$ref);
+            }
+        }
+
+        // Follow pagination
+        if (node.next) {
+            await traverse(node.next);
+        }
+    }
+
+    await traverse(ref);
+    return manuscripts;
+}
+
 const NODE_NAMES = {
     'kanun-patrika': 'kanun',
     'ciaa-annual-reports': 'ciaa',
     'ciaa-press-releases': 'press',
+    'court-orders': 'court',
 } as const;
 
-type TabKey = 'kanun' | 'ciaa' | 'press';
+type TabKey = 'kanun' | 'ciaa' | 'press' | 'court';
 
 export default function IndexViewer() {
-    const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
-    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null });
-    const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false });
-    const [loadingProgress, setLoadingProgress] = useState<Record<TabKey, { current: number; total: number } | null>>({ kanun: null, ciaa: null, press: null });
+    const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null });
+    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null, court: null });
+    const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false });
+    const [loadingProgress, setLoadingProgress] = useState<Record<TabKey, { current: number; total: number } | null>>({ kanun: null, ciaa: null, press: null, court: null });
     const [rootLoading, setRootLoading] = useState(true);
     const [rootError, setRootError] = useState<string | null>(null);
-    const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null });
+    const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null });
     const [activeTab, setActiveTab] = useState<TabKey>('kanun');
     const loadingRef = useRef<Set<TabKey>>(new Set());
     const abortControllersRef = useRef<Map<TabKey, AbortController>>(new Map());
@@ -147,7 +207,7 @@ export default function IndexViewer() {
             .then((root) => {
                 if (controller.signal.aborted) return;
                 
-                const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null };
+                const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null, court: null };
                 for (const child of root.children) {
                     const tab = NODE_NAMES[child.name as keyof typeof NODE_NAMES];
                     if (tab) {
@@ -190,9 +250,15 @@ export default function IndexViewer() {
         abortControllersRef.current.set(tab, controller);
         
         try {
-            const items = await fetchAllManuscripts(ref, controller.signal, (current, total) => {
-                setLoadingProgress((prev) => ({ ...prev, [tab]: { current, total } }));
-            });
+            // Use recursive fetcher for court orders (has nested structure)
+            // Use regular fetcher for other tabs (flat structure with pagination)
+            const items = tab === 'court'
+                ? await fetchAllManuscriptsRecursive(ref, controller.signal, (current, total) => {
+                    setLoadingProgress((prev) => ({ ...prev, [tab]: { current, total } }));
+                })
+                : await fetchAllManuscripts(ref, controller.signal, (current, total) => {
+                    setLoadingProgress((prev) => ({ ...prev, [tab]: { current, total } }));
+                });
             setManuscripts((prev) => ({ ...prev, [tab]: items }));
             setLoadingProgress((prev) => ({ ...prev, [tab]: null }));
         } catch (err: unknown) {
@@ -551,6 +617,120 @@ export default function IndexViewer() {
         );
     };
 
+    const renderCourtOrders = () => {
+        if (tabLoading.court) return renderLoading('court');
+        if (tabErrors.court) {
+            return (
+                <div className="state-container error fade-in">
+                    <p className="error-icon">⚠️</p>
+                    <p>{tabErrors.court}</p>
+                    <button className="btn-primary" onClick={() => {
+                        setTabErrors(prev => ({ ...prev, court: null }));
+                        loadTab('court');
+                    }}>Retry</button>
+                </div>
+            );
+        }
+        const items = manuscripts.court || [];
+        if (items.length === 0) return <p className="empty-state">No records found for Court Orders.</p>;
+
+        // Transform data for table
+        const tableData = items.map((item, index) => {
+            // Extract case number from filename (e.g., "080-CR-0001.1.doc" -> "080-CR-0001")
+            const caseMatch = item.file_name.match(/^(\d{3}-[A-Z]+-\d{4})/);
+            const caseNumber = caseMatch ? caseMatch[1] : item.file_name;
+            
+            // Extract year from case number (e.g., "080-CR-0001" -> "080")
+            const yearMatch = caseNumber.match(/^(\d{3})/);
+            const year = yearMatch ? yearMatch[1] : 'N/A';
+            
+            // Extract document number (e.g., "080-CR-0001.1.doc" -> "1")
+            const docMatch = item.file_name.match(/\.(\d+)\./);
+            const docNumber = docMatch ? docMatch[1] : '1';
+            
+            return {
+                id: index + 1,
+                caseNumber,
+                year,
+                docNumber,
+                fileName: item.file_name,
+                url: item.url,
+            };
+        });
+
+        // Define columns
+        const columns: ColumnDef<typeof tableData[0]>[] = [
+            {
+                accessorKey: 'id',
+                header: '#',
+                size: 60,
+                enableColumnFilter: false,
+            },
+            {
+                accessorKey: 'caseNumber',
+                header: 'Case Number',
+                size: 150,
+                cell: (info) => (
+                    <a href={info.row.original.url} target="_blank" rel="noopener noreferrer">
+                        {info.getValue() as string}
+                    </a>
+                ),
+            },
+            {
+                accessorKey: 'year',
+                header: 'Year (BS)',
+                size: 100,
+                cell: (info) => {
+                    const year = info.getValue() as string;
+                    return year === 'N/A' ? year : `20${year}`;
+                },
+            },
+            {
+                accessorKey: 'docNumber',
+                header: 'Doc #',
+                size: 80,
+            },
+            {
+                accessorKey: 'fileName',
+                header: 'File Name',
+            },
+            {
+                id: 'actions',
+                header: 'Actions',
+                size: 100,
+                enableColumnFilter: false,
+                enableSorting: false,
+                cell: (info) => {
+                    const ext = info.row.original.fileName.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toUpperCase() || 'FILE';
+                    return (
+                        <a 
+                            href={info.row.original.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className={`file-chip ${ext === 'PDF' ? 'pdf' : ext === 'DOC' || ext === 'DOCX' ? 'doc' : 'default'}`}
+                            style={{ textDecoration: 'none' }}
+                        >
+                            View {ext}
+                        </a>
+                    );
+                },
+            },
+        ];
+
+        return (
+            <div className="fade-in">
+                <DataTable 
+                    data={tableData} 
+                    columns={columns} 
+                    pageSize={10}
+                    searchPlaceholder="Search by case number, year, or any keyword..."
+                    showAdvancedSearch={false}
+                    onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
+                />
+            </div>
+        );
+    };
+
     return (
         <div className="index-viewer">
             <div className="tabs slide-down">
@@ -572,12 +752,19 @@ export default function IndexViewer() {
                 >
                     CIAA Press Releases
                 </button>
+                <button
+                    className={`tab-btn ${activeTab === 'court' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('court')}
+                >
+                    Court Orders
+                </button>
             </div>
 
             <div className="content-area">
                 {activeTab === 'kanun' && renderKanunPatrika()}
                 {activeTab === 'ciaa' && renderCiaaReports()}
                 {activeTab === 'press' && renderPressReleases()}
+                {activeTab === 'court' && renderCourtOrders()}
             </div>
         </div>
     );
