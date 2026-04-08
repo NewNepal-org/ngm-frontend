@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
+// TODO: Replace with backend metadata extraction when persons data is available
+import { containsPersonName } from '../data/casesData';
+
+// TODO: Refactor this file into smaller components:
+// - Extract API logic → src/api/indexApi.ts (fetchPage, Types)
+// - Extract tab renderers → src/components/tabs/KanunTab.tsx, CiaaReportsTab.tsx, PressReleasesTab.tsx
+// - Extract shared UI → src/components/ui/LoadingSpinner.tsx, ErrorMessage.tsx, EmptyState.tsx
+// - Keep IndexViewer.tsx as orchestrator with state management only
 
 // NGM Index v2.0 types - Tree-based hierarchical index
 type Manuscript = {
@@ -48,6 +56,16 @@ function extractYear(filename: string): string | null {
     return devanagariToAscii(match[0]);
 }
 
+// Convert production URLs to use proxy in development
+const isDevelopment = import.meta.env.DEV;
+
+function getProxiedUrl(url: string): string {
+    if (isDevelopment && url.startsWith('https://ngm-store.jawafdehi.org')) {
+        return url.replace('https://ngm-store.jawafdehi.org', '/api');
+    }
+    return url;
+}
+
 /** Fetch all manuscripts for a node, following pagination via `next` links. */
 async function fetchAllManuscripts(
     ref: string, 
@@ -81,7 +99,8 @@ async function fetchAllManuscripts(
             onProgress(pageCount, maxPages);
         }
 
-        const res = await fetch(url, { signal });
+        const proxiedUrl = getProxiedUrl(url);
+        const res = await fetch(proxiedUrl, { signal });
         if (!res.ok) throw new Error(`Failed to fetch ${url}`);
         const node: IndexNodeFull = await res.json();
         if (node.manuscripts) manuscripts.push(...node.manuscripts);
@@ -115,8 +134,10 @@ export default function IndexViewer() {
     useEffect(() => {
         const controller = new AbortController();
         
-        // Always use production data
-        const indexUrl = 'https://ngm-store.jawafdehi.org/index-v2.json';
+        // Use Vite proxy for development, direct URL for production
+        const indexUrl = isDevelopment 
+            ? '/api/index-v2.json'
+            : 'https://ngm-store.jawafdehi.org/index-v2.json';
             
         fetch(indexUrl, { signal: controller.signal })
             .then((res) => {
@@ -129,7 +150,10 @@ export default function IndexViewer() {
                 const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null };
                 for (const child of root.children) {
                     const tab = NODE_NAMES[child.name as keyof typeof NODE_NAMES];
-                    if (tab) refs[tab] = child.$ref;
+                    if (tab) {
+                        // Convert URLs to use proxy in development
+                        refs[tab] = getProxiedUrl(child.$ref);
+                    }
                 }
                 setStubs(refs);
                 setRootLoading(false);
@@ -155,6 +179,10 @@ export default function IndexViewer() {
             existingController.abort();
         }
 
+        // Clear any stale errors and progress before starting new load
+        setTabErrors((prev) => ({ ...prev, [tab]: null }));
+        setLoadingProgress((prev) => ({ ...prev, [tab]: null }));
+        
         loadingRef.current.add(tab);
         setTabLoading((prev) => ({ ...prev, [tab]: true }));
         
@@ -173,6 +201,7 @@ export default function IndexViewer() {
             }
             const msg = err instanceof Error ? err.message : 'Failed to load data';
             setTabErrors((prev) => ({ ...prev, [tab]: msg }));
+            setLoadingProgress((prev) => ({ ...prev, [tab]: null }));
         } finally {
             abortControllersRef.current.delete(tab);
             loadingRef.current.delete(tab);
@@ -210,7 +239,7 @@ export default function IndexViewer() {
                 <p className="error-icon">⚠️</p>
                 <h2>Connection Error</h2>
                 <p>{rootError}</p>
-                <button className="btn-primary mt" onClick={() => window.location.reload()}>Retry</button>
+                <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
             </div>
         );
     }
@@ -236,7 +265,7 @@ export default function IndexViewer() {
                 <div className="state-container error fade-in">
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.kanun}</p>
-                    <button className="btn-primary mt" onClick={() => {
+                    <button className="btn-primary" onClick={() => {
                         setTabErrors(prev => ({ ...prev, kanun: null }));
                         loadTab('kanun');
                     }}>Retry</button>
@@ -275,7 +304,10 @@ export default function IndexViewer() {
                 accessorKey: 'year',
                 header: 'Year (BS)',
                 size: 120,
-                cell: (info) => `${info.getValue()} BS`,
+                cell: (info) => {
+                    const year = info.getValue() as string;
+                    return year === 'N/A' ? year : `${year} BS`;
+                },
             },
             {
                 id: 'actions',
@@ -304,6 +336,8 @@ export default function IndexViewer() {
                     columns={columns} 
                     pageSize={10}
                     searchPlaceholder="Search by document name, year, or any keyword..."
+                    showAdvancedSearch={false}
+                    onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
                 />
             </div>
         );
@@ -316,7 +350,7 @@ export default function IndexViewer() {
                 <div className="state-container error fade-in">
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.ciaa}</p>
-                    <button className="btn-primary mt" onClick={() => {
+                    <button className="btn-primary" onClick={() => {
                         setTabErrors(prev => ({ ...prev, ciaa: null }));
                         loadTab('ciaa');
                     }}>Retry</button>
@@ -407,6 +441,8 @@ export default function IndexViewer() {
                     columns={columns} 
                     pageSize={10}
                     searchPlaceholder="Search by serial number, title, date, or any keyword..."
+                    showAdvancedSearch={false}
+                    onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
                 />
             </div>
         );
@@ -419,7 +455,7 @@ export default function IndexViewer() {
                 <div className="state-container error fade-in">
                     <p className="error-icon">⚠️</p>
                     <p>{tabErrors.press}</p>
-                    <button className="btn-primary mt" onClick={() => {
+                    <button className="btn-primary" onClick={() => {
                         setTabErrors(prev => ({ ...prev, press: null }));
                         loadTab('press');
                     }}>Retry</button>
@@ -508,6 +544,8 @@ export default function IndexViewer() {
                     columns={columns} 
                     pageSize={10}
                     searchPlaceholder="Search by press release number, title, date, or any keyword..."
+                    showAdvancedSearch={false}
+                    onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
                 />
             </div>
         );
