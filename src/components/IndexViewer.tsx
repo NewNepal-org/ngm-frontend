@@ -10,6 +10,26 @@ import { containsPersonName } from '../data/casesData';
 // - Extract shared UI → src/components/ui/LoadingSpinner.tsx, ErrorMessage.tsx, EmptyState.tsx
 // - Keep IndexViewer.tsx as orchestrator with state management only
 
+// Configuration constants
+const FETCH_CONFIG = {
+    MAX_PAGES_SIMPLE: 100,
+    MAX_PAGES_RECURSIVE: 5000,
+    MAX_PAGES_PER_YEAR: 50,
+    MAX_DEPTH: 3,
+    RECENT_YEARS_COUNT: 3,
+    BATCH_SIZE: 10,
+} as const;
+
+const TABLE_CONFIG = {
+    DEFAULT_PAGE_SIZE: 10,
+    COLUMN_SIZE_SMALL: 60,
+    COLUMN_SIZE_MEDIUM: 80,
+    COLUMN_SIZE_LARGE: 100,
+    COLUMN_SIZE_XLARGE: 120,
+    COLUMN_SIZE_XXLARGE: 150,
+    COLUMN_SIZE_XXXLARGE: 200,
+} as const;
+
 // NGM Index v2.0 types - Tree-based hierarchical index
 type Manuscript = {
     url: string;
@@ -76,7 +96,7 @@ async function fetchAllManuscripts(
     let url: string | undefined = ref;
     const visitedUrls = new Set<string>();
     let pageCount = 0;
-    const maxPages = 100; // Safety limit
+    const maxPages = FETCH_CONFIG.MAX_PAGES_SIMPLE;
 
     while (url) {
         if (signal?.aborted) {
@@ -116,14 +136,14 @@ async function fetchAllManuscriptsRecursive(
     signal?: AbortSignal,
     onProgress?: (current: number, total: number) => void,
     onDataChunk?: (manuscripts: Manuscript[]) => void,
-    maxDepth: number = 3, // Limit depth: 0=root, 1=court type, 2=years, 3=cases (fetch only recent years)
-    maxPagesPerYear: number = 50 // Limit pages per year to prevent overload
+    maxDepth: number = FETCH_CONFIG.MAX_DEPTH,
+    maxPagesPerYear: number = FETCH_CONFIG.MAX_PAGES_PER_YEAR
 ): Promise<Manuscript[]> {
     const visitedUrls = new Set<string>();
     let pageCount = 0;
-    const maxPages = 5000; // Increased limit
+    const maxPages = FETCH_CONFIG.MAX_PAGES_RECURSIVE;
     const allManuscripts: Manuscript[] = [];
-    const yearPageCounts = new Map<string, number>(); // Track pages per year
+    const yearPageCounts = new Map<string, number>();
 
     async function traverse(url: string, depth: number = 0, yearContext: string = ''): Promise<Manuscript[]> {
         if (signal?.aborted) {
@@ -179,16 +199,16 @@ async function fetchAllManuscriptsRecursive(
 
         // Only traverse children if within depth limit
         if (node.children && depth < maxDepth) {
-            // For year folders (depth 1), only fetch recent years (last 3 years)
+            // For year folders (depth 1), only fetch recent years
             let childrenToFetch = node.children;
             if (depth === 1) {
-                // Sort by year descending and take only recent 3 years
+                // Sort by year descending and take only recent years
                 childrenToFetch = [...node.children]
                     .sort((a, b) => b.name.localeCompare(a.name))
-                    .slice(0, 3);
+                    .slice(0, FETCH_CONFIG.RECENT_YEARS_COUNT);
             }
 
-            const batchSize = 10;
+            const batchSize = FETCH_CONFIG.BATCH_SIZE;
             for (let i = 0; i < childrenToFetch.length; i += batchSize) {
                 const batch = childrenToFetch.slice(i, i + batchSize);
                 const childResults = await Promise.all(
@@ -355,26 +375,7 @@ export default function IndexViewer() {
         };
     }, []);
 
-    if (rootLoading) {
-        return (
-            <div className="state-container bounce-in" role="status" aria-live="polite">
-                <div className="spinner" aria-hidden="true"></div>
-                <p>Loading database...</p>
-            </div>
-        );
-    }
-
-    if (rootError) {
-        return (
-            <div className="state-container error fade-in" role="alert">
-                <p className="error-icon" aria-hidden="true">⚠️</p>
-                <h2>Connection Error</h2>
-                <p>{rootError}</p>
-                <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
-            </div>
-        );
-    }
-
+    // All render functions must be declared before any early returns
     const renderLoading = useCallback((tab?: TabKey) => {
         const progress = tab ? loadingProgress[tab] : null;
         const streaming = tab ? isStreamingData[tab] : false;
@@ -420,7 +421,7 @@ export default function IndexViewer() {
             {
                 accessorKey: 'id',
                 header: '#',
-                size: 60,
+                size: TABLE_CONFIG.COLUMN_SIZE_SMALL,
                 enableColumnFilter: false,
             },
             {
@@ -435,7 +436,7 @@ export default function IndexViewer() {
             {
                 accessorKey: 'year',
                 header: 'Year (BS)',
-                size: 120,
+                size: TABLE_CONFIG.COLUMN_SIZE_XLARGE,
                 cell: (info) => {
                     const year = info.getValue() as string;
                     return year === 'N/A' ? year : `${year} BS`;
@@ -444,7 +445,7 @@ export default function IndexViewer() {
             {
                 id: 'actions',
                 header: 'Actions',
-                size: 100,
+                size: TABLE_CONFIG.COLUMN_SIZE_LARGE,
                 enableColumnFilter: false,
                 enableSorting: false,
                 cell: (info) => (
@@ -466,7 +467,7 @@ export default function IndexViewer() {
                 <DataTable 
                     data={tableData} 
                     columns={columns} 
-                    pageSize={10}
+                    pageSize={TABLE_CONFIG.DEFAULT_PAGE_SIZE}
                     searchPlaceholder="Search by document name, year, or any keyword..."
                     showAdvancedSearch={false}
                     onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
@@ -530,7 +531,7 @@ export default function IndexViewer() {
             {
                 accessorKey: 'serialNumber',
                 header: 'Serial No.',
-                size: 100,
+                size: TABLE_CONFIG.COLUMN_SIZE_LARGE,
             },
             {
                 accessorKey: 'title',
@@ -544,12 +545,12 @@ export default function IndexViewer() {
             {
                 accessorKey: 'date',
                 header: 'Date',
-                size: 150,
+                size: TABLE_CONFIG.COLUMN_SIZE_XXLARGE,
             },
             {
                 id: 'actions',
                 header: 'Actions',
-                size: 100,
+                size: TABLE_CONFIG.COLUMN_SIZE_LARGE,
                 enableColumnFilter: false,
                 enableSorting: false,
                 cell: (info) => (
@@ -571,7 +572,7 @@ export default function IndexViewer() {
                 <DataTable 
                     data={tableData} 
                     columns={columns} 
-                    pageSize={10}
+                    pageSize={TABLE_CONFIG.DEFAULT_PAGE_SIZE}
                     searchPlaceholder="Search by serial number, title, date, or any keyword..."
                     showAdvancedSearch={false}
                     onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
@@ -629,7 +630,7 @@ export default function IndexViewer() {
             {
                 accessorKey: 'pressId',
                 header: 'No.',
-                size: 80,
+                size: TABLE_CONFIG.COLUMN_SIZE_MEDIUM,
                 cell: (info) => info.getValue() || 'N/A',
             },
             {
@@ -639,12 +640,12 @@ export default function IndexViewer() {
             {
                 accessorKey: 'date',
                 header: 'Publication Date',
-                size: 150,
+                size: TABLE_CONFIG.COLUMN_SIZE_XXLARGE,
             },
             {
                 id: 'actions',
                 header: 'Download',
-                size: 200,
+                size: TABLE_CONFIG.COLUMN_SIZE_XXXLARGE,
                 enableColumnFilter: false,
                 enableSorting: false,
                 cell: (info) => (
@@ -674,7 +675,7 @@ export default function IndexViewer() {
                 <DataTable 
                     data={tableData} 
                     columns={columns} 
-                    pageSize={10}
+                    pageSize={TABLE_CONFIG.DEFAULT_PAGE_SIZE}
                     searchPlaceholder="Search by press release number, title, date, or any keyword..."
                     showAdvancedSearch={false}
                     onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
@@ -739,13 +740,13 @@ export default function IndexViewer() {
             {
                 accessorKey: 'id',
                 header: '#',
-                size: 60,
+                size: TABLE_CONFIG.COLUMN_SIZE_SMALL,
                 enableColumnFilter: false,
             },
             {
                 accessorKey: 'caseNumber',
                 header: 'Case Number',
-                size: 150,
+                size: TABLE_CONFIG.COLUMN_SIZE_XXLARGE,
                 cell: (info) => (
                     <a href={info.row.original.url} target="_blank" rel="noopener noreferrer">
                         {info.getValue() as string}
@@ -755,7 +756,7 @@ export default function IndexViewer() {
             {
                 accessorKey: 'year',
                 header: 'Year (BS)',
-                size: 100,
+                size: TABLE_CONFIG.COLUMN_SIZE_LARGE,
                 cell: (info) => {
                     const year = info.getValue() as string;
                     return year === 'N/A' ? year : `20${year}`;
@@ -764,7 +765,7 @@ export default function IndexViewer() {
             {
                 accessorKey: 'docNumber',
                 header: 'Doc #',
-                size: 80,
+                size: TABLE_CONFIG.COLUMN_SIZE_MEDIUM,
             },
             {
                 accessorKey: 'fileName',
@@ -773,7 +774,7 @@ export default function IndexViewer() {
             {
                 id: 'actions',
                 header: 'Actions',
-                size: 100,
+                size: TABLE_CONFIG.COLUMN_SIZE_LARGE,
                 enableColumnFilter: false,
                 enableSorting: false,
                 cell: (info) => {
@@ -805,7 +806,7 @@ export default function IndexViewer() {
                 <DataTable 
                     data={tableData} 
                     columns={columns} 
-                    pageSize={10}
+                    pageSize={TABLE_CONFIG.DEFAULT_PAGE_SIZE}
                     searchPlaceholder="Search by case number, year, or any keyword..."
                     showAdvancedSearch={false}
                     onNameSearch={(rowText, nameQuery) => containsPersonName(rowText, nameQuery)}
@@ -813,6 +814,27 @@ export default function IndexViewer() {
             </div>
         );
     }, [tabLoading.court, tabErrors.court, manuscripts.court, isStreamingData.court, loadTab]);
+
+    // Early returns after all hooks are declared
+    if (rootLoading) {
+        return (
+            <div className="state-container bounce-in" role="status" aria-live="polite">
+                <div className="spinner" aria-hidden="true"></div>
+                <p>Loading database...</p>
+            </div>
+        );
+    }
+
+    if (rootError) {
+        return (
+            <div className="state-container error fade-in" role="alert">
+                <p className="error-icon" aria-hidden="true">⚠️</p>
+                <h2>Connection Error</h2>
+                <p>{rootError}</p>
+                <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
+            </div>
+        );
+    }
 
     return (
         <div className="index-viewer">
