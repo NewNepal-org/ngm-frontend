@@ -16,7 +16,6 @@ const FETCH_CONFIG = {
     MAX_PAGES_RECURSIVE: 5000,
     MAX_PAGES_PER_YEAR: 50,
     MAX_DEPTH: 3,
-    RECENT_YEARS_COUNT: 3,
     BATCH_SIZE: 10,
 } as const;
 
@@ -145,7 +144,7 @@ async function fetchAllManuscriptsRecursive(
     const allManuscripts: Manuscript[] = [];
     const yearPageCounts = new Map<string, number>();
 
-    async function traverse(url: string, depth: number = 0, yearContext: string = ''): Promise<Manuscript[]> {
+    async function traverse(url: string, depth: number = 0, branchContext: string = '', yearContext: string = ''): Promise<Manuscript[]> {
         if (signal?.aborted) {
             throw new Error('Request was cancelled');
         }
@@ -159,11 +158,12 @@ async function fetchAllManuscriptsRecursive(
             return [];
         }
 
-        // Check per-year limit
-        if (yearContext && depth >= 2) {
-            const yearPages = yearPageCounts.get(yearContext) || 0;
+        // Check per-branch-year limit
+        if (branchContext && yearContext && depth >= 2) {
+            const branchYearKey = `${branchContext}|${yearContext}`;
+            const yearPages = yearPageCounts.get(branchYearKey) || 0;
             if (yearPages >= maxPagesPerYear) {
-                console.warn(`Reached page limit for year ${yearContext} (${maxPagesPerYear} pages), skipping`);
+                console.warn(`Reached page limit for ${branchContext}/${yearContext} (${maxPagesPerYear} pages), skipping`);
                 return [];
             }
         }
@@ -171,8 +171,9 @@ async function fetchAllManuscriptsRecursive(
         visitedUrls.add(url);
         pageCount++;
         
-        if (yearContext && depth >= 2) {
-            yearPageCounts.set(yearContext, (yearPageCounts.get(yearContext) || 0) + 1);
+        if (branchContext && yearContext && depth >= 2) {
+            const branchYearKey = `${branchContext}|${yearContext}`;
+            yearPageCounts.set(branchYearKey, (yearPageCounts.get(branchYearKey) || 0) + 1);
         }
 
         if (onProgress) {
@@ -199,23 +200,18 @@ async function fetchAllManuscriptsRecursive(
 
         // Only traverse children if within depth limit
         if (node.children && depth < maxDepth) {
-            // For year folders (depth 1), only fetch recent years
-            let childrenToFetch = node.children;
-            if (depth === 1) {
-                // Sort by year descending and take only recent years
-                childrenToFetch = [...node.children]
-                    .sort((a, b) => b.name.localeCompare(a.name))
-                    .slice(0, FETCH_CONFIG.RECENT_YEARS_COUNT);
-            }
+            // Fetch all children (no filtering by year)
+            const childrenToFetch = node.children;
 
             const batchSize = FETCH_CONFIG.BATCH_SIZE;
             for (let i = 0; i < childrenToFetch.length; i += batchSize) {
                 const batch = childrenToFetch.slice(i, i + batchSize);
                 const childResults = await Promise.all(
                     batch.map(child => {
-                        // Pass year context for tracking
+                        // Pass branch and year context for tracking
+                        const newBranchContext = depth === 0 ? child.name : branchContext;
                         const newYearContext = depth === 1 ? child.name : yearContext;
-                        return traverse(child.$ref, depth + 1, newYearContext);
+                        return traverse(child.$ref, depth + 1, newBranchContext, newYearContext);
                     })
                 );
                 childResults.forEach(result => {
@@ -226,7 +222,7 @@ async function fetchAllManuscriptsRecursive(
 
         // Follow pagination (only at leaf level - case folders)
         if (node.next && depth >= maxDepth) {
-            const nextResults = await traverse(node.next, depth, yearContext);
+            const nextResults = await traverse(node.next, depth, branchContext, yearContext);
             localManuscripts.push(...nextResults);
         }
 
