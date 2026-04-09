@@ -35,7 +35,6 @@ export interface CaseInfo {
   sources: string[];
 }
 
-// Sample data extracted from the case files using Likhit
 export const personsData: Person[] = [
   {
     id: 'person-1',
