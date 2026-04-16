@@ -3,6 +3,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
 // TODO: Replace with backend metadata extraction when persons data is available
 import { containsPersonName } from '../data/casesData';
+import { loadFromIndexedDB, saveToIndexedDB } from '../utils/indexedDB';
 
 // TODO: Refactor this file into smaller components:
 // - Extract API logic → src/api/indexApi.ts (fetchPage, Types)
@@ -13,9 +14,9 @@ import { containsPersonName } from '../data/casesData';
 // Configuration constants
 const FETCH_CONFIG = {
     MAX_PAGES_SIMPLE: 100,
-    MAX_PAGES_RECURSIVE: 5000,
-    MAX_PAGES_PER_YEAR: 50,
-    MAX_DEPTH: 3,
+    MAX_PAGES_RECURSIVE: Infinity, // No limit - fetch everything
+    MAX_PAGES_PER_YEAR: Infinity, // No limit - fetch all pages per year
+    MAX_DEPTH: 10, // Deep enough for any reasonable structure
     BATCH_SIZE: 10,
 } as const;
 
@@ -173,7 +174,18 @@ async function fetchAllManuscriptsRecursive(
         
         if (branchContext && yearContext && depth >= 2) {
             const branchYearKey = `${branchContext}|${yearContext}`;
-            yearPageCounts.set(branchYearKey, (yearPageCounts.get(branchYearKey) || 0) + 1);
+            const currentCount = (yearPageCounts.get(branchYearKey) || 0) + 1;
+            yearPageCounts.set(branchYearKey, currentCount);
+            
+            // Log progress for each year (every 50 pages for large datasets)
+            if (currentCount % 50 === 0) {
+                console.log(`📄 ${branchContext}/${yearContext}: ${currentCount} pages loaded, ${allManuscripts.length.toLocaleString()} total items`);
+            }
+        }
+        
+        // Log overall progress every 100 pages
+        if (pageCount % 100 === 0) {
+            console.log(`⏳ Progress: ${pageCount} pages fetched, ${allManuscripts.length.toLocaleString()} items loaded`);
         }
 
         if (onProgress) {
@@ -186,6 +198,11 @@ async function fetchAllManuscriptsRecursive(
         const node: IndexNodeFull = await res.json();
 
         const localManuscripts: Manuscript[] = [];
+        
+        // Debug logging
+        if (depth <= 2) {
+            console.log(`🔍 Depth ${depth}: ${node.name || 'unnamed'}, children: ${node.children?.length || 0}, manuscripts: ${node.manuscripts?.length || 0}, has next: ${!!node.next}`);
+        }
 
         // Add manuscripts from this node
         if (node.manuscripts) {
@@ -220,8 +237,9 @@ async function fetchAllManuscriptsRecursive(
             }
         }
 
-        // Follow pagination (only at leaf level - case folders)
-        if (node.next && depth >= maxDepth) {
+        // Follow pagination at ALL depths where it exists
+        // This ensures we get all pages at year level, case folder level, etc.
+        if (node.next) {
             const nextResults = await traverse(node.next, depth, branchContext, yearContext);
             localManuscripts.push(...nextResults);
         }
@@ -230,6 +248,14 @@ async function fetchAllManuscriptsRecursive(
     }
 
     await traverse(ref);
+    
+    // Log final summary
+    console.log(`✅ Fetch complete: ${allManuscripts.length.toLocaleString()} total items, ${pageCount.toLocaleString()} pages fetched`);
+    console.log(`📊 Per-year breakdown:`, Array.from(yearPageCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, count]) => `${key}: ${count} pages`)
+    );
+    
     return allManuscripts;
 }
 
@@ -298,6 +324,16 @@ export default function IndexViewer() {
         const ref = stubs[tab];
         if (!ref || manuscripts[tab] !== null || loadingRef.current.has(tab)) return;
 
+        // For court orders, check IndexedDB first for instant loading
+        if (tab === 'court') {
+            const cachedData = await loadFromIndexedDB(tab);
+            if (cachedData && cachedData.length > 0) {
+                console.log(`⚡ INSTANT LOAD: ${cachedData.length} court orders from IndexedDB`);
+                setManuscripts((prev) => ({ ...prev, [tab]: cachedData }));
+                return; // Exit early - data loaded instantly!
+            }
+        }
+
         // Abort any existing request for this tab
         const existingController = abortControllersRef.current.get(tab);
         if (existingController) {
@@ -334,6 +370,10 @@ export default function IndexViewer() {
                 );
                 setManuscripts((prev) => ({ ...prev, [tab]: items }));
                 setIsStreamingData((prev) => ({ ...prev, [tab]: false }));
+                
+                // Save to IndexedDB for instant loading next time
+                console.log(`💾 Saving ${items.length} court orders to IndexedDB...`);
+                await saveToIndexedDB(tab, items);
             } else {
                 const items = await fetchAllManuscripts(ref, controller.signal, (current, total) => {
                     setLoadingProgress((prev) => ({ ...prev, [tab]: { current, total } }));
