@@ -9,7 +9,7 @@ import {
     type SortingState,
     type ColumnFiltersState,
 } from '@tanstack/react-table';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 
 interface DataTableProps<TData extends Record<string, unknown>> {
     data: TData[];
@@ -219,9 +219,8 @@ export function DataTable<TData extends Record<string, unknown>>({
                     </thead>
                     <tbody>
                         {table.getRowModel().rows.map((row) => (
-                            <>
+                            <Fragment key={row.id}>
                                 <tr 
-                                    key={row.id}
                                     onClick={() => onRowClick?.(row.original)}
                                     style={{
                                         cursor: onRowClick ? 'pointer' : 'default',
@@ -245,7 +244,7 @@ export function DataTable<TData extends Record<string, unknown>>({
                                     ))}
                                 </tr>
                                 {renderExpandedRow && renderExpandedRow(row.original)}
-                            </>
+                            </Fragment>
                         ))}
                     </tbody>
                 </table>

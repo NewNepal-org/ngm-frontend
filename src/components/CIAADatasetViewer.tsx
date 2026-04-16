@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
@@ -84,6 +84,7 @@ export default function CIAADatasetViewer() {
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<{ fy: string; total: number; matched: number; needs_review: number; unmatched: number } | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const load = async (signal?: AbortSignal) => {
     setLoading(true);
@@ -191,11 +192,16 @@ export default function CIAADatasetViewer() {
     }
   };
 
-  useEffect(() => {
+  const startLoad = () => {
+    abortControllerRef.current?.abort();
     const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    abortControllerRef.current = controller;
     void load(controller.signal);
-    return () => controller.abort();
+  };
+
+  useEffect(() => {
+    startLoad();
+    return () => abortControllerRef.current?.abort();
   }, []);
 
   const columns: ColumnDef<TableRow>[] = [
@@ -329,11 +335,11 @@ export default function CIAADatasetViewer() {
 
     return (
       <tr key={`${row.id}-expanded`} style={{ background: '#f9fafb' }}>
-        <td colSpan={4} style={{ padding: 0 }}>
+        <td colSpan={columns.length} style={{ padding: 0 }}>
           <div style={{ 
             padding: '1.5rem 2rem', 
             borderTop: '2px solid #e5e7eb',
-            animation: 'slideDown 0.2s ease-out'
+            animation: 'slide-down 0.2s ease-out'
           }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
               {/* Left Column */}
@@ -560,7 +566,7 @@ export default function CIAADatasetViewer() {
       <div className="state-container error fade-in" role="alert">
         <p className="error-icon" aria-hidden="true">⚠️</p>
         <p>{error}</p>
-        <button className="btn-primary" onClick={() => void load()}>Retry</button>
+        <button className="btn-primary" onClick={startLoad}>Retry</button>
       </div>
     );
   }
