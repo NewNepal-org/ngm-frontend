@@ -3,7 +3,6 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
 // TODO: Replace with backend metadata extraction when persons data is available
 import { containsPersonName } from '../data/casesData';
-import { loadFromIndexedDB, saveToIndexedDB } from '../utils/indexedDB';
 
 // TODO: Refactor this file into smaller components:
 // - Extract API logic → src/api/indexApi.ts (fetchPage, Types)
@@ -324,16 +323,6 @@ export default function IndexViewer() {
         const ref = stubs[tab];
         if (!ref || manuscripts[tab] !== null || loadingRef.current.has(tab)) return;
 
-        // For court orders, check IndexedDB first for instant loading
-        if (tab === 'court') {
-            const cachedData = await loadFromIndexedDB(tab);
-            if (cachedData && cachedData.length > 0) {
-                console.log(`⚡ INSTANT LOAD: ${cachedData.length} court orders from IndexedDB`);
-                setManuscripts((prev) => ({ ...prev, [tab]: cachedData }));
-                return; // Exit early - data loaded instantly!
-            }
-        }
-
         // Abort any existing request for this tab
         const existingController = abortControllersRef.current.get(tab);
         if (existingController) {
@@ -370,10 +359,6 @@ export default function IndexViewer() {
                 );
                 setManuscripts((prev) => ({ ...prev, [tab]: items }));
                 setIsStreamingData((prev) => ({ ...prev, [tab]: false }));
-                
-                // Save to IndexedDB for instant loading next time
-                console.log(`💾 Saving ${items.length} court orders to IndexedDB...`);
-                await saveToIndexedDB(tab, items);
             } else {
                 const items = await fetchAllManuscripts(ref, controller.signal, (current, total) => {
                     setLoadingProgress((prev) => ({ ...prev, [tab]: { current, total } }));
