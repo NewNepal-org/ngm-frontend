@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { DataTable } from './DataTable';
+import CIAADatasetViewer from './CIAADatasetViewer';
 // TODO: Replace with backend metadata extraction when persons data is available
 import { containsPersonName } from '../data/casesData';
 
@@ -240,18 +241,19 @@ const NODE_NAMES = {
     'court-orders': 'court',
 } as const;
 
-type TabKey = 'kanun' | 'ciaa' | 'press' | 'court';
+type TabKey = 'kanun' | 'ciaa' | 'press' | 'court' | 'dataset';
 
 export default function IndexViewer() {
-    const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null });
-    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null, court: null });
-    const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false });
-    const [loadingProgress, setLoadingProgress] = useState<Record<TabKey, { current: number; total: number } | null>>({ kanun: null, ciaa: null, press: null, court: null });
-    const [isStreamingData, setIsStreamingData] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false });
+    const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
+    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
+    const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false, dataset: false });
+    const [loadingProgress, setLoadingProgress] = useState<Record<TabKey, { current: number; total: number } | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
+    const [isStreamingData, setIsStreamingData] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false, dataset: false });
     const [rootLoading, setRootLoading] = useState(true);
     const [rootError, setRootError] = useState<string | null>(null);
-    const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null });
+    const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
     const [activeTab, setActiveTab] = useState<TabKey>('kanun');
+    const [hasVisitedDataset, setHasVisitedDataset] = useState(false);
     const loadingRef = useRef<Set<TabKey>>(new Set());
     const abortControllersRef = useRef<Map<TabKey, AbortController>>(new Map());
 
@@ -272,7 +274,7 @@ export default function IndexViewer() {
             .then((root) => {
                 if (controller.signal.aborted) return;
                 
-                const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null, court: null };
+                const refs: Record<TabKey, string | null> = { kanun: null, ciaa: null, press: null, court: null, dataset: null };
                 for (const child of root.children) {
                     const tab = NODE_NAMES[child.name as keyof typeof NODE_NAMES];
                     if (tab) {
@@ -295,6 +297,9 @@ export default function IndexViewer() {
 
     // Lazy-load manuscripts when a tab is first activated
     const loadTab = useCallback(async (tab: TabKey) => {
+        // Dataset tab doesn't need loading from stubs
+        if (tab === 'dataset') return;
+        
         const ref = stubs[tab];
         if (!ref || manuscripts[tab] !== null || loadingRef.current.has(tab)) return;
 
@@ -871,6 +876,19 @@ export default function IndexViewer() {
                 >
                     Court Orders
                 </button>
+                <button
+                    id="dataset-tab"
+                    role="tab"
+                    aria-selected={activeTab === 'dataset'}
+                    aria-controls="dataset-panel"
+                    className={`tab-btn ${activeTab === 'dataset' ? 'active' : ''}`}
+                    onClick={() => {
+                        setActiveTab('dataset');
+                        setHasVisitedDataset(true);
+                    }}
+                >
+                    CIAA Cases Dataset
+                </button>
             </div>
 
             <div className="content-area">
@@ -885,6 +903,9 @@ export default function IndexViewer() {
                 </div>
                 <div id="court-panel" role="tabpanel" aria-labelledby="court-tab" hidden={activeTab !== 'court'}>
                     {activeTab === 'court' && renderCourtOrders()}
+                </div>
+                <div id="dataset-panel" role="tabpanel" aria-labelledby="dataset-tab" hidden={activeTab !== 'dataset'}>
+                    {hasVisitedDataset && <CIAADatasetViewer />}
                 </div>
             </div>
         </div>
