@@ -880,7 +880,6 @@ export default function IndexViewer() {
     const renderCourtOrders = useCallback(() => {
         const items = manuscripts.court || [];
         const isLoading = tabLoading.court;
-        const isStreaming = isStreamingData.court;
         
         console.log('Render court orders:', { 
             availableCourts: availableCourts.length, 
@@ -1037,10 +1036,6 @@ export default function IndexViewer() {
             // Extract year from case number (e.g., "080-CR-0001" -> "080")
             const yearMatch = caseNumber.match(/^(\d{3})/);
             const year = yearMatch ? yearMatch[1] : 'N/A';
-            
-            // Extract document number (e.g., "080-CR-0001.1.doc" -> "1")
-            const docMatch = item.file_name.match(/\.(\d+)\./);
-            const docNumber = docMatch ? docMatch[1] : '1';
             
             return {
                 id: index + 1,
