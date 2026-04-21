@@ -269,11 +269,11 @@ const NODE_NAMES = {
 type TabKey = 'kanun' | 'ciaa' | 'press' | 'court' | 'dataset';
 
 export default function IndexViewer() {
-    const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null });
-    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null, court: [] });
-    const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false });
-    const [loadingProgress, setLoadingProgress] = useState<Record<TabKey, { current: number; total: number } | null>>({ kanun: null, ciaa: null, press: null, court: null });
-    const [isStreamingData, setIsStreamingData] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false });
+    const [stubs, setStubs] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
+    const [manuscripts, setManuscripts] = useState<Record<TabKey, Manuscript[] | null>>({ kanun: null, ciaa: null, press: null, court: [], dataset: null });
+    const [tabLoading, setTabLoading] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false, dataset: false });
+    const [loadingProgress, setLoadingProgress] = useState<Record<TabKey, { current: number; total: number } | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
+    const [isStreamingData, setIsStreamingData] = useState<Record<TabKey, boolean>>({ kanun: false, ciaa: false, press: false, court: false, dataset: false });
     const [rootLoading, setRootLoading] = useState(true);
     const [rootError, setRootError] = useState<string | null>(null);
     const [tabErrors, setTabErrors] = useState<Record<TabKey, string | null>>({ kanun: null, ciaa: null, press: null, court: null, dataset: null });
