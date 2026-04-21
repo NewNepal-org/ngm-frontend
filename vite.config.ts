@@ -11,6 +11,15 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
+      '/r2-testing': {
+        target: 'https://pub-4c5659ae2e0249e99311f6c50897f48a.r2.dev',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/r2-testing/, ''),
+      },
+    },
+    fs: {
+      // Allow serving files from parent directory
+      allow: ['..'],
     },
   },
 })
