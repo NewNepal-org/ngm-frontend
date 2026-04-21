@@ -537,12 +537,10 @@ export default function IndexViewer() {
                 // Fetch all years in this batch in parallel
                 const batchResults = await Promise.all(
                     batch.map(async (yearNode) => {
-                        let yearPageCount = 0;
                         const yearManuscripts = await fetchAllManuscriptsRecursive(
                             yearNode.$ref,
                             controller.signal,
-                            (current) => {
-                                yearPageCount = current;
+                            () => {
                                 totalPageCount++;
                                 setLoadingProgress(prev => ({ ...prev, court: { current: totalPageCount, total: 0 } }));
                             },
